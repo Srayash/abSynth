@@ -29,6 +29,7 @@ def run_latent_dim_sweep(
     train_loader,
     val_loader,
     verbose=True,
+    prior_mismatch_threshold: float = 0.3,  # matches the diagnostics "target: < 0.3"
 ):
     sweep_results = []
     for ld in candidate_dims:
@@ -46,8 +47,15 @@ def run_latent_dim_sweep(
         )
 
     sweep_df = pd.DataFrame(sweep_results)
-    best_latent_dim = sweep_df.loc[sweep_df["prior_mismatch"].idxmin(), "latent_dim"]
+
+    passing = sweep_df[sweep_df["prior_mismatch"] < prior_mismatch_threshold]
+    if passing.empty:
+        # nothing calibrated well enough; fall back to the old behavior
+        best_latent_dim = sweep_df.loc[sweep_df["prior_mismatch"].idxmin(), "latent_dim"]
+    else:
+        best_latent_dim = passing.loc[passing["final_val_loss"].idxmin(), "latent_dim"]
+
     if verbose:
         print(sweep_df)
-        print(f"\nBest latent_dim (by prior calibration): {best_latent_dim}")
+        print(f"\nBest latent_dim (best val_loss among prior_mismatch < {prior_mismatch_threshold}): {best_latent_dim}")
     return int(best_latent_dim), sweep_df

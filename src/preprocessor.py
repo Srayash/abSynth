@@ -14,6 +14,9 @@ class TVAEPreprocessorConfig:
 
     # Gaussian Mixture Model settings for continuous columns
     n_gmm_components: int = 10
+    log_transform_columns: List[str] = field(
+        default_factory=list
+    )  # columns to log1p before GMM fitting (only valid for non-negative data)
     gmm_covariance_type: str = "diag"
     gmm_max_iter: int = 100
     gmm_random_state: int = 42
@@ -46,6 +49,7 @@ class ContinuousColumnInfo:
     min_value: float
     max_value: float
     output_dim: int  # n_components (for mode) + 1 (for normalized value)
+    log_transformed: bool = False  # whether log1p was applied before GMM fitting
 
 
 @dataclass
@@ -135,6 +139,15 @@ class TVAEPreprocessor:
         for col in continuous_cols:
             data = df[col].values.reshape(-1, 1)
 
+            log_transformed = col in self.config.log_transform_columns
+            fit_data = data
+            if log_transformed:
+                if (data < 0).any():
+                    raise ValueError(
+                        f"Cannot log1p column '{col}': contains negative values"
+                    )
+                fit_data = np.log1p(data)
+
             # Fit Gaussian Mixture Model
             gmm = GaussianMixture(
                 n_components=self.config.n_gmm_components,
@@ -143,7 +156,7 @@ class TVAEPreprocessor:
                 random_state=self.config.gmm_random_state,
                 reg_covar=self.config.gmm_reg_covar,
             )
-            gmm.fit(data)
+            gmm.fit(fit_data)
 
             info = ContinuousColumnInfo(
                 name=col,
@@ -151,6 +164,7 @@ class TVAEPreprocessor:
                 min_value=float(data.min()),
                 max_value=float(data.max()),
                 output_dim=self.config.n_gmm_components + 1,
+                log_transformed=log_transformed,
             )
             self.continuous_columns_info.append(info)
 
@@ -179,6 +193,9 @@ class TVAEPreprocessor:
         """
         data = data.reshape(-1, 1)
         n_samples = len(data)
+
+        if info.log_transformed:
+            data = np.log1p(data)
 
         # Get GMM component assignments
         modes = info.gmm.predict(data)
@@ -305,6 +322,9 @@ class TVAEPreprocessor:
                 # Inverse of normalization
                 values = normalized_values[mask] * 4 * std + mean
                 reconstructed[mask] = values
+
+            if info.log_transformed:
+                reconstructed = np.expm1(reconstructed)
 
             # Clip to original range
             reconstructed = np.clip(reconstructed, info.min_value, info.max_value)
