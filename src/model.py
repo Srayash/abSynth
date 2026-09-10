@@ -47,6 +47,8 @@ class TVAEConfig:
         None  # defaults to prior_mismatch_score if None
     )
 
+    discrete_class_weights: Optional[dict] = None  # for datasets with rare classes.
+
     # Device
     device: str = "cpu"
 
@@ -188,6 +190,7 @@ class TVAE(nn.Module):
     def __init__(self, config: TVAEConfig):
         super().__init__()
         self.config = config
+        self.discrete_class_weights = config.discrete_class_weights or {}
 
         # Build encoder and decoder
         self.encoder = Encoder(
@@ -291,8 +294,11 @@ class TVAE(nn.Module):
                 recon_loss = recon_loss + nll.sum()
             else:  # discrete: one-hot mode indicator or categorical block
                 target = torch.argmax(x[:, start:end], dim=1)
+                weight = self.discrete_class_weights.get(start)
+                if weight is not None:
+                    weight = weight.to(x_recon.device)
                 recon_loss = recon_loss + nn.functional.cross_entropy(
-                    x_recon[:, start:end], target, reduction="sum"
+                    x_recon[:, start:end], target, weight=weight, reduction="sum"
                 )
 
         recon_loss = recon_loss / batch_size
